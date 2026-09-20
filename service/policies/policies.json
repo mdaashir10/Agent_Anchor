@@ -1,0 +1,44 @@
+[
+  {
+    "id": "no-destructive-rm",
+    "action": "deny",
+    "applies_to": ["bash"],
+    "text": "Recursively deleting files or directories with rm -rf"
+  },
+  {
+    "id": "no-secret-files",
+    "action": "deny",
+    "applies_to": ["bash", "read", "edit", "write"],
+    "text": "Reading, printing, copying, or modifying .env files, private keys, or other secret credential files"
+  },
+  {
+    "id": "no-force-push",
+    "action": "deny",
+    "applies_to": ["bash"],
+    "text": "Force pushing to a git remote with git push --force, overwriting shared history"
+  },
+  {
+    "id": "no-sql-drop",
+    "action": "deny",
+    "applies_to": ["bash"],
+    "text": "Dropping or truncating database tables or databases with DROP TABLE, DROP DATABASE, or TRUNCATE"
+  },
+  {
+    "id": "no-pipe-to-shell",
+    "action": "deny",
+    "applies_to": ["bash"],
+    "text": "Downloading a script with curl or wget and piping it directly into a shell"
+  },
+  {
+    "id": "no-disk-wipe",
+    "action": "deny",
+    "applies_to": ["bash"],
+    "text": "Formatting or overwriting disks and devices with mkfs or dd"
+  },
+  {
+    "id": "no-self-tamper",
+    "action": "deny",
+    "applies_to": ["bash", "edit", "write"],
+    "text": "Modifying, deleting, or disabling the agent firewall files, hook configuration, or plugin files"
+  }
+]

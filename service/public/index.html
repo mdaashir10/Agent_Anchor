@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Firewall</title>
+<style>
+  :root {
+    --paper: #f5f6f8;
+    --ink: #16202b;
+    --muted: #5d6a78;
+    --line: #d7dce3;
+    --allow: #17704a;
+    --block: #b3261e;
+    --block-tint: #fbeceb;
+    --warn: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #12171d;
+      --ink: #e6eaef;
+      --muted: #93a0ae;
+      --line: #263039;
+      --allow: #58c08d;
+      --block: #ff7b72;
+      --block-tint: #2a1719;
+      --warn: #e0b45a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); color: var(--ink); }
+  body {
+    margin: 0 auto;
+    max-width: 1100px;
+    padding: 24px 20px 48px;
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+  .status { color: var(--muted); font-size: 13px; }
+  .status b { color: var(--ink); font-weight: 600; }
+  .status .bad { color: var(--block); }
+  .status .warn { color: var(--warn); }
+
+  .hero { margin: 36px 0 8px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .big { font-size: clamp(56px, 12vw, 104px); line-height: 1; font-weight: 300; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .big.blocked { color: var(--block); }
+  .big.allowed { color: var(--allow); }
+  .big small { font-size: 0.32em; letter-spacing: 0; margin-left: 6px; color: var(--muted); font-weight: 400; }
+  .hero-caption { color: var(--muted); max-width: 34ch; }
+  .summary { margin: 4px 0 28px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .summary strong { color: var(--ink); font-weight: 600; }
+
+  .table-wrap { overflow-x: auto; border-top: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.time, td.harness, td.tool { color: var(--muted); white-space: nowrap; }
+  td.action { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+  td.verdict { font-weight: 650; white-space: nowrap; }
+  tr.allow td.verdict { color: var(--allow); }
+  tr.block { background: var(--block-tint); }
+  tr.block td.verdict { color: var(--block); }
+  tr.block td:first-child { box-shadow: inset 3px 0 0 var(--block); }
+  tr.invalid td.verdict { color: var(--warn); }
+  td.policy { white-space: nowrap; }
+  .empty { padding: 28px 12px; color: var(--muted); }
+  @media (prefers-reduced-motion: no-preference) {
+    tr.fresh { animation: settle 0.9s ease-out; }
+    @keyframes settle { from { background: color-mix(in srgb, var(--ink) 12%, transparent); } }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Firewall</h1>
+  <div class="status" id="status">Connecting…</div>
+</header>
+
+<section class="hero" aria-live="polite">
+  <div class="big" id="big">–<small>ms</small></div>
+  <div class="hero-caption" id="caption">Policy check time for the most recent action</div>
+</section>
+<p class="summary" id="summary">No actions checked yet.</p>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>Agent</th><th>Tool</th><th>Action</th>
+        <th>Verdict</th><th>Policy</th><th class="num">Check time</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="empty" id="empty">Run an action in your agent and it will show up here.</div>
+</div>
+
+<script>
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  const big = document.getElementById('big');
+  const summary = document.getElementById('summary');
+  const statusEl = document.getElementById('status');
+  const MAX_ROWS = 200;
+  const seen = new Set();
+  const stats = { total: 0, allow: 0, block: 0, invalid: 0, lat: [] };
+  let live = false;
+  let health = { moss: '...' };
+
+  function cell(cls, text) {
+    const td = document.createElement('td');
+    if (cls) td.className = cls;
+    td.textContent = text;
+    return td;
+  }
+
+  function median(a) {
+    const s = [...a].sort((x, y) => x - y);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  function policyLabel(e) {
+    if (e.verdict === 'invalid') return 'rejected';
+    if (!e.matched_policy) return e.source === 'moss' && e.score != null ? 'no match (score ' + e.score.toFixed(2) + ')' : 'no match';
+    if (e.source === 'moss' && e.score != null) return e.matched_policy + ' (Moss ' + e.score.toFixed(2) + ')';
+    return e.matched_policy;
+  }
+
+  function addEvent(e) {
+    if (seen.has(e.id)) return;
+    seen.add(e.id);
+    empty.style.display = 'none';
+
+    stats.total++;
+    if (e.verdict === 'allow') stats.allow++;
+    else if (e.verdict === 'block') stats.block++;
+    else stats.invalid++;
+    if (typeof e.latency_ms === 'number') stats.lat.push(e.latency_ms);
+    if (stats.lat.length > 500) stats.lat.shift();
+
+    const tr = document.createElement('tr');
+    tr.className = e.verdict + ' fresh';
+    const t = new Date(e.ts);
+    tr.append(
+      cell('time', t.toLocaleTimeString([], { hour12: false })),
+      cell('harness', e.harness || ''),
+      cell('tool', e.tool || ''),
+      cell('action', e.summary || ''),
+      cell('verdict', e.verdict === 'allow' ? 'Allowed' : e.verdict === 'block' ? 'Blocked' : 'Rejected'),
+      cell('policy', policyLabel(e)),
+      cell('num', typeof e.latency_ms === 'number' ? e.latency_ms.toFixed(2) + ' ms' : '')
+    );
+    rows.prepend(tr);
+    while (rows.children.length > MAX_ROWS) rows.lastChild.remove();
+
+    if (typeof e.latency_ms === 'number') {
+      big.className = 'big ' + (e.verdict === 'block' ? 'blocked' : 'allowed');
+      big.innerHTML = '';
+      big.append(e.latency_ms < 10 ? e.latency_ms.toFixed(2) : e.latency_ms.toFixed(1));
+      const u = document.createElement('small');
+      u.textContent = 'ms';
+      big.append(u);
+    }
+    renderSummary();
+  }
+
+  function renderSummary() {
+    summary.textContent = '';
+    const parts = [
+      [stats.total, ' checked'], [stats.allow, ' allowed'], [stats.block, ' blocked'],
+    ];
+    parts.forEach(([n, label], i) => {
+      const s = document.createElement('strong');
+      s.textContent = n;
+      summary.append(s, label + (i < parts.length - 1 ? ', ' : '.'));
+    });
+    if (stats.lat.length) {
+      summary.append(' Median ');
+      const m = document.createElement('strong');
+      m.textContent = median(stats.lat).toFixed(2) + ' ms';
+      const x = document.createElement('strong');
+      x.textContent = Math.max(...stats.lat).toFixed(2) + ' ms';
+      summary.append(m, ', slowest ', x, '.');
+    }
+    if (stats.invalid) summary.append(' ' + stats.invalid + ' rejected as malformed.');
+  }
+
+  function renderStatus() {
+    statusEl.textContent = '';
+    const feed = document.createElement('span');
+    feed.innerHTML = live ? '<b>Live</b>' : '<span class="bad">Feed disconnected, retrying</span>';
+    const moss = document.createElement('span');
+    if (health.moss === 'ready') moss.innerHTML = 'Policy search: <b>Moss ready</b>';
+    else if (health.moss === 'disabled') moss.innerHTML = '<span class="warn">Policy search: rules only, Moss not configured</span>';
+    else if (health.moss === 'error') moss.innerHTML = '<span class="bad">Policy search: Moss failed to load</span>';
+    else moss.textContent = 'Policy search: checking';
+    statusEl.append(feed, '  |  ', moss);
+  }
+
+  async function pollHealth() {
+    try {
+      const r = await fetch('/health');
+      health = await r.json();
+    } catch { health = { moss: 'unreachable' }; }
+    renderStatus();
+  }
+
+  const es = new EventSource('/events');
+  es.onopen = () => { live = true; renderStatus(); };
+  es.onerror = () => { live = false; renderStatus(); };
+  es.onmessage = (m) => addEvent(JSON.parse(m.data));
+
+  renderStatus();
+  pollHealth();
+  setInterval(pollHealth, 10000);
+</script>
+</body>
+</html>
