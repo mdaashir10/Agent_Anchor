@@ -1,0 +1,16 @@
+{
+  "name": "Agent_Anchor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.mjs",
+    "seed": "node scripts/seed-moss.mjs",
+    "test": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "@moss-js/moss": "^1.12.0",
+    "express": "^4.21.0"
+  }
+}
