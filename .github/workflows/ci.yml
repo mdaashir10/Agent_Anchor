@@ -1,69 +1,24 @@
 name: CI
-
-on:
-  push:
-    branches: ['main', 'release/*']
-  pull_request:
-    branches: ['main', 'release/*']
+on: [push, pull_request]
 
 jobs:
-  build-test:
+  build-and-test:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:27.5.1-dind
-        options: --privileged
-        ports:
-          - 2375:2375
-        env:
-          DOCKER_TLS_CERTDIR: ''
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
-      - name: Cache npm modules
-        uses: actions/cache@v3
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
+          node-version: 20
       - name: Install dependencies
-        run: |
-          cd service
-          npm ci
-
-      - name: Run lint and test
-        run: |
-          cd service
-          npm test
-
+        working-directory: service
+        run: npm ci
+      - name: Start service (Moss disabled — no credentials in CI)
+        working-directory: service
+        run: nohup npm start &
+      - name: Wait for service to be ready
+        run: npx wait-on http://127.0.0.1:3000/health
+      - name: Run smoke tests
+        working-directory: service
+        run: npm test
       - name: Build Docker image
-        env:
-          DOCKER_HOST: tcp://127.0.0.1:2375
-          DOCKER_TLS_VERIFY: 0
-        run: |
-          cd service
-          docker compose -f ../docker-compose.yml build agent-anchor
-
-      - name: Publish Docker image to Docker Hub
-        if: startsWith(github.ref, 'refs/heads/main')
-        env:
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-        run: |
-          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-          docker tag agent-anchor:latest ghcr.io/${{ github.repository_owner }}/agent-anchor:latest
-          docker push ghcr.io/${{ github.repository_owner }}/agent-anchor:latest
-
-      - name: Save Docker image as artifact (optional)
-        uses: actions/upload-artifact@v3
-        with:
-          name: agent-anchor-image
-          path: Dockerfile
+        run: docker build -t agent-anchor .
