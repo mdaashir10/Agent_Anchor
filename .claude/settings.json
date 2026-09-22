@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/adapters/firewall/claude-shim.mjs",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
